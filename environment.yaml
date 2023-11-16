@@ -1,0 +1,15 @@
+channels:
+  - nvidia
+  - conda-forge
+dependencies:
+  - pytorch::pytorch
+  - pytorch::pytorch-cuda
+  - tokenizers>=0.13.3
+  - transformers[torch]
+  - conda-forge::peft
+  - conda-forge::optimum
+  - anaconda::scikit-learn
+  - pip
+  - pip:
+    - ai2-tango[all]
+    - auto-gptq
