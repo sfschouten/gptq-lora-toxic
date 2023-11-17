@@ -10,8 +10,9 @@ from tango.integrations.transformers import Config
 from transformers import GPTQConfig as GPTQConfigOriginal
 from transformers.models.auto import modeling_auto
 from transformers.utils.quantization_config import QuantizationConfigMixin
-from peft import get_peft_model, PeftModel, LoraConfig, \
-    PeftConfig as PeftConfigOriginal
+
+import peft
+from peft import get_peft_model, PeftModel, LoraConfig, PeftConfig as PeftConfigOriginal
 
 
 # PEFT
@@ -30,6 +31,8 @@ class PeftWrapper(PeftModel):
 
     @classmethod
     def get_peft_model_constr(cls, base_model: Model, peft_config: PeftConfig) -> PeftModel:
+        if base_model.is_quantized and base_model.quantization_method == 'gptq':
+            base_model = peft.prepare_model_for_kbit_training(base_model)
         return get_peft_model(base_model, peft_config)
 
 

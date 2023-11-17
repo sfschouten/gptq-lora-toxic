@@ -41,10 +41,15 @@ local tokenizer = {
           r: 16,
           lora_alpha: 32,
           lora_dropout: 0.1,
+          bias: "none",
+          target_modules: ['q_proj', 'v_proj', 'k_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj'],
+          task_type: "CAUSAL_LM",
         },
       },
       "data": {"ref": "prepared_cad"},
       "tokenizer": tokenizer,
+      "max_steps_train": 200,
+      "max_steps_eval": 500,
     },
   }
 }

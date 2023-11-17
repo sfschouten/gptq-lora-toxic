@@ -1,5 +1,5 @@
 import csv
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import datasets
 from tango import Step
@@ -12,6 +12,7 @@ import pandas as pd
 from datasets import Dataset, DatasetDict
 
 from data_utils import make_data_block
+from utils import fix_padding_token
 
 DEPTH = 15
 
@@ -199,12 +200,21 @@ class PrepareCAD(Step[datasets.DatasetDict]):
 
         hf_dataset = DatasetDict(dataset)
 
-        # specify loss weights
+        # specify loss weights, amplify loss of minority class(es)
         loss_weights = defaultdict(lambda: 1)
-        loss_weights[9753] = 0.25
 
-        if tokenizer.pad_token is None:
-            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        labels = hf_dataset['train']['completion']
+        label_counts = Counter(labels)
+        majority_label, _ = label_counts.most_common(1)[0]
+        for label, count in label_counts.items():
+            if label == majority_label:
+                continue
+            token_ids = tokenizer.encode(label)
+            for token_id in token_ids[1:]:
+                loss_weights[token_id] = len(labels) / count
+
+        # make sure the tokenizer has a token for padding
+        tokenizer = fix_padding_token(tokenizer)
 
         data_blocks = hf_dataset.map(
             make_data_block,

@@ -1,4 +1,6 @@
 import os
+import warnings
+import math
 from functools import partial
 
 import torch
@@ -16,6 +18,7 @@ from tango.integrations.torch import Model
 from tango.integrations.transformers import Tokenizer
 
 from data_utils import collate_data
+from utils import fix_padding_token
 
 
 @Step.register('finetune')
@@ -26,8 +29,8 @@ class Finetune(Step):
         batch_size=1, lr=0.00005, num_epochs=20, acc_steps=8, max_steps_train=200, max_steps_eval=1000,
         **kwargs
     ):
-        if tokenizer.pad_token is None:
-            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        tokenizer = fix_padding_token(tokenizer)
+
         collate_fn = partial(collate_data, pad_token_id=tokenizer.pad_token_id)
         train_dataloader = DataLoader(data['train'], batch_size=1, shuffle=True, collate_fn=collate_fn)
         valid_dataloader = DataLoader(data['dev'], batch_size=1, shuffle=True, collate_fn=collate_fn)
@@ -36,6 +39,11 @@ class Finetune(Step):
         train_steps = min(max_steps_train, len(train_dataloader))
         eval_steps = min(max_steps_eval, len(valid_dataloader))
 
+        # prepare model for training with peft
+        model.base_model.peft_config["default"].total_step = train_steps * num_epochs
+        model.gradient_checkpointing_enable()
+        model.print_trainable_parameters()
+
         # optimizer and lr scheduler
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
         lr_scheduler = get_linear_schedule_with_warmup(
@@ -43,13 +51,13 @@ class Finetune(Step):
             num_warmup_steps=0,
             num_training_steps=(train_steps * num_epochs),
         )
-        model.base_model.peft_config["default"].total_step = train_steps * num_epochs
         # training and evaluation
         with torch.cuda.amp.autocast():
             def _train():
                 model.train()
                 total_loss = 0
                 progress_bar = tqdm(train_dataloader)
+
                 for step, batch in enumerate(progress_bar):
                     batch = {k: v.to(model.device) for k, v in batch.items()}
                     weights = batch.pop('weights')
@@ -57,10 +65,14 @@ class Finetune(Step):
 
                     weight = weights.mean()
                     loss = weight * outputs.loss
-                    total_loss += loss.detach().float()
+
+                    if math.isnan(loss):
+                        warnings.warn(f"Warning! loss became nan, skipping batch.")
+                        continue
+
                     loss.backward()
 
-                    if step % acc_steps == acc_steps - 1:
+                    if (step % acc_steps) == (acc_steps - 1):
                         optimizer.step()
                         lr_scheduler.step()
                         optimizer.zero_grad()
@@ -68,6 +80,7 @@ class Finetune(Step):
                     nonlocal global_step
                     global_step += 1
 
+                    total_loss += loss.detach().float()
                     progress_bar.set_postfix(loss=loss.item())
                     # wandb.log({"loss": loss.item()})
                     if step >= max_steps_train:
@@ -96,21 +109,22 @@ class Finetune(Step):
 
                     if calc_accuracy:
                         with torch.no_grad():
-                            pred_tokens = outputs.logits[:, -2, :].argmax(dim=-1)
+                            # assuming single-token labels
+                            pred_tokens = outputs.logits[:, :, :].argmax(dim=-1)    # B x T
 
                         for b_i in range(len(batch['labels'])):
-                            nr_labels += 1
-
                             idxr = batch['labels'][b_i] != -100
-                            label_tokens = batch['input_ids'][b_i][idxr]
-                            label_text = tokenizer.decode(label_tokens)
+                            i_label_token = batch['input_ids'][b_i][idxr][0]
+                            i_pred_token = pred_tokens[b_i][idxr.roll(-1)][0]
+                            label_text = tokenizer.decode(i_label_token)
                             eval_labels.append(label_text)
 
-                            pred_text = tokenizer.decode(pred_tokens[b_i])
+                            pred_text = tokenizer.decode(i_pred_token)
                             eval_preds.append(pred_text)
 
                             correct = int(label_text == pred_text)
                             nr_correct += correct
+                            nr_labels += 1
 
                         eval_progbar.set_postfix(accuracy=nr_correct / nr_labels)
 
