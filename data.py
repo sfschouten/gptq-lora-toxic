@@ -60,8 +60,6 @@ class FlattenCAD(Step[pd.DataFrame]):
             parent_columns (List[str]): which columns to select from the ancestry of the comment.
             require_full_depth (bool): if true, only keep comments with as many ancestors as `depth';
                                        if false, allow comments with fewer ancestors.
-            select_each_annotation (bool): if true, will perform join such that each annotation for each ancestor is
-                                           included.
         """
 
         if not groupby_agg_fns:
@@ -79,11 +77,12 @@ class FlattenCAD(Step[pd.DataFrame]):
             foreign_key = f'info_id.l{level}'  # key to join on
             foreign_key_p1 = f'info_id.l{level + 1}'
             # which columns to select
-            selection = df[['info_id', 'info_id.parent'] + parent_columns] \
-                .rename(columns={
-                'info_id': foreign_key,
-                'info_id.parent': foreign_key_p1,
-            }).groupby([foreign_key, foreign_key_p1], as_index=False).agg(groupby_agg_fns)
+            selection = df[['info_id', 'info_id.parent'] + parent_columns].rename(
+                columns={
+                    'info_id': foreign_key,
+                    'info_id.parent': foreign_key_p1,
+                }
+            ).groupby([foreign_key, foreign_key_p1], as_index=False).agg(groupby_agg_fns)
 
             assert selection[foreign_key].is_unique
 
@@ -138,6 +137,7 @@ class FlattenCAD(Step[pd.DataFrame]):
 
 @Step.register('prepare_cad')
 class PrepareCAD(Step[datasets.DatasetDict]):
+    DETERMINISTIC = True
     FORMAT = DatasetsFormat
 
     @classmethod

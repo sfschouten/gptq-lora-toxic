@@ -15,16 +15,18 @@ local tokenizer = {
     },
     "flattened_cad": {
       "type": "flatten_cad",
-      "cad_df": {"ref": "download_cad"},
+      cad_df: {"ref": "download_cad"},
     },
     "prepared_cad": {
       "type": "prepare_cad",
-      "flat_cad_df": {"ref": "flattened_cad"},
-      "tokenizer": tokenizer
+      flat_cad_df: {"ref": "flattened_cad"},
+      tokenizer: tokenizer,
+      sample_max_len: 512,
+      block_max_len: 512,
     },
     "finetuned": {
       "type": "finetune",
-      "model": {
+      model: {
         "type": "peft::get_peft_model",
         base_model: {
           "type": "transformers::AutoModelForCausalLM::from_pretrained",
@@ -46,10 +48,10 @@ local tokenizer = {
           task_type: "CAUSAL_LM",
         },
       },
-      "data": {"ref": "prepared_cad"},
-      "tokenizer": tokenizer,
-      "max_steps_train": 200,
-      "max_steps_eval": 500,
+      data: {"ref": "prepared_cad"},
+      tokenizer: tokenizer,
+      max_steps_train: 200,
+      max_steps_eval: 500,
     },
   }
 }
