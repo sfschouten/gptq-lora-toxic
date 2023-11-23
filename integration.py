@@ -12,7 +12,7 @@ from transformers.models.auto import modeling_auto
 from transformers.utils.quantization_config import QuantizationConfigMixin
 
 import peft
-from peft import get_peft_model, PeftModel, LoraConfig, PeftConfig as PeftConfigOriginal
+from peft import get_peft_model, PeftModel, AdaLoraConfig, LoraConfig, PeftConfig as PeftConfigOriginal
 
 
 # PEFT
@@ -23,7 +23,7 @@ class PeftConfig(PeftConfigOriginal, Registrable):
 
 
 PeftConfig.register('lora-config')(LoraConfig)
-# TODO: add other PeftConfig types
+PeftConfig.register('adalora-config')(AdaLoraConfig)
 
 
 # get_peft_model

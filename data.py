@@ -128,8 +128,7 @@ class FlattenCAD(Step[pd.DataFrame]):
         )
         flat_cad_df['depth'] = flat_cad_df[column('type')].notna().sum(axis=1)
         flat_cad_df['hierarchy'] = flat_cad_df[column('type')].apply(
-            lambda row: ".".join([str(typ) for typ in row if str(typ) != 'nan']),
-            axis=1
+            lambda row: ".".join([str(typ) for typ in row if str(typ) != 'nan']), axis=1
         )
 
         return flat_cad_df
@@ -153,7 +152,7 @@ class PrepareCAD(Step[datasets.DatasetDict]):
             return 'Toxic'
 
     @classmethod
-    def _construct_sample(cls, idx, df):
+    def _construct_sample(cls, idx, df, include_context=True):
         row = df.iloc[idx]
 
         columns = [
@@ -180,7 +179,11 @@ class PrepareCAD(Step[datasets.DatasetDict]):
 
         title = f"# THREAD in r/{row['info_subreddit']}"
 
-        full_message = title + "<br/>\n\n" + "<br/>\n\n".join(parts)
+        if include_context:
+            full_message = title + "<br/>\n\n" + "<br/>\n\n".join(parts)
+        else:
+            full_message = parts[-1]
+
         return {
             'text': full_message,
             'completion': completion,
@@ -188,13 +191,13 @@ class PrepareCAD(Step[datasets.DatasetDict]):
         }
 
     def run(self, flat_cad_df: pd.DataFrame, tokenizer: Tokenizer,
-            sample_max_len=512, block_max_len=512, **kwargs) -> datasets.DatasetDict:
+            sample_max_len=512, block_max_len=512, include_context=True, **kwargs) -> datasets.DatasetDict:
         dataset = {}
         for split in ('train', 'dev', 'test'):
             relevant_cad_df = flat_cad_df[flat_cad_df['split'] == split]
 
             dataset[split] = Dataset.from_list([
-                self._construct_sample(i, relevant_cad_df)
+                self._construct_sample(i, relevant_cad_df, include_context=include_context)
                 for i in range(len(relevant_cad_df))
             ])
 
