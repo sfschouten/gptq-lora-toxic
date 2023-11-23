@@ -9,10 +9,10 @@ local tokenizer = {
 
 
 # Hyperparameters
-//local nr_epochs = 20;
-//local max_train_steps = 150;
-local nr_epochs = 1;
-local max_train_steps = 5;
+local nr_epochs = 20;
+local max_train_steps = 150;
+//local nr_epochs = 1;
+//local max_train_steps = 5;
 
 
 # PEFT
@@ -89,7 +89,7 @@ local peft_configs = {
 				num_epochs: nr_epochs,
 				min_acc_samples: 8,                     # minimum nr. of samples to accumulate gradients for before descending
 				epoch_train_steps: max_train_steps,     # nr. of gradient descent steps per epoch
-				min_samples_eval: 5 #750,                  # min nr. of samples to validate with
+				min_samples_eval: 750,                  # min nr. of samples to validate with
 			},
 			"test_results": {
 			    "type": "test",
