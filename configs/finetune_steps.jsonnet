@@ -66,6 +66,7 @@ local peft_configs = {
 				tokenizer: tokenizer,
 				sample_max_len: 512,
 				block_max_len: 8192,
+//				block_max_len: 512,
 				include_context: context == 'context',
 			},
 			"finetuned_model": {

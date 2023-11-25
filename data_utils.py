@@ -4,7 +4,7 @@ from typing import Callable, Dict, List, Optional
 import copy
 
 import torch
-from torch import LongTensor, FloatTensor
+from torch import LongTensor, FloatTensor, Tensor
 
 from transformers import PreTrainedTokenizer
 
@@ -77,17 +77,17 @@ def make_data_block(
     # make data blocks of samples
     tokenized_samples = sorted(
         [
-            (p, l) for idx, (p, l) in enumerate(zip(tokenized_prompts, tokenized_labels))
+            (idx, p, l) for idx, (p, l) in enumerate(zip(tokenized_prompts, tokenized_labels))
             if idx not in dropped_indices
         ],
-        key=lambda x: (len(x[0]) + len(x[1])) if merge_prompt_label else len(x[0])
+        key=lambda x: (len(x[1]) + len(x[2])) if merge_prompt_label else len(x[1])
     )
     sample_blocks = []
     sample_block = []
     blk_max_len = 0
     blk_total_len = 0
     for tokenized_sample in tokenized_samples:
-        prompt_ids, label_ids = tokenized_sample
+        _, prompt_ids, label_ids = tokenized_sample
         ori_sample_len = len(prompt_ids)
         if merge_prompt_label:
             ori_sample_len += len(label_ids)
@@ -121,6 +121,7 @@ def make_data_block(
         "attention_mask": [],
         "labels": [],
         "weights": [],
+        "idxs": [],
     }
 
     # padding each data block internally
@@ -129,10 +130,12 @@ def make_data_block(
         attention_mask = []
         label_ids = []
         weights = []
+        idxs = []
         label_max_len = max([len(sample[1]) for sample in block])
 
         for sample in block:
-            tokenized_prompt, tokenized_label = sample
+            idx, tokenized_prompt, tokenized_label = sample
+            idxs.append(idx)
             sample_len = len(tokenized_prompt)
             if merge_prompt_label:
                 sample_len += len(tokenized_label)
@@ -155,11 +158,12 @@ def make_data_block(
         new_samples["attention_mask"].append(attention_mask)
         new_samples["labels"].append(label_ids)
         new_samples["weights"].append(weights)
+        new_samples["idxs"].append(idxs)
 
     return new_samples
 
 
-def collate_data(blocks: List[Dict[str, List[List[int]]]], pad_token_id: int) -> Dict[str, LongTensor]:
+def collate_data(blocks: List[Dict[str, List[List[int]]]], pad_token_id: int) -> Dict[str, Tensor]:
     def pad_block(block, pads):
         return torch.cat((pads.to(block.device), block), dim=-1)
 
@@ -167,6 +171,7 @@ def collate_data(blocks: List[Dict[str, List[List[int]]]], pad_token_id: int) ->
     attention_mask_blocks = [LongTensor(block["attention_mask"]) for block in blocks]
     label_blocks = [LongTensor(block["labels"]) for block in blocks]
     weight_blocks = [FloatTensor(block['weights']) for block in blocks]
+    idx_blocks = [LongTensor(block['idxs']) for block in blocks]
 
     bsz = len(blocks)
     inp_max_len = max([block.size(-1) for block in input_ids_blocks])
@@ -184,8 +189,9 @@ def collate_data(blocks: List[Dict[str, List[List[int]]]], pad_token_id: int) ->
             label_blocks[i] = pad_block(label_blocks[i], torch.ones((block_bsz, label_pad_num)) * -100)
 
     return {
-        "input_ids": torch.cat(input_ids_blocks, dim=0).long(),
-        "attention_mask": torch.cat(attention_mask_blocks, dim=0).long(),
-        "labels": torch.cat(label_blocks, dim=0).long(),
+        "input_ids": torch.cat(input_ids_blocks, dim=0),
+        "attention_mask": torch.cat(attention_mask_blocks, dim=0),
+        "labels": torch.cat(label_blocks, dim=0),
         "weights": torch.cat(weight_blocks, dim=0),
+        "idxs": torch.cat(idx_blocks, dim=0),
     }

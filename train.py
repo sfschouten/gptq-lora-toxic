@@ -25,53 +25,65 @@ from utils import fix_padding_token
 
 def _eval(model, eval_dataloader, tokenizer, samples_eval=sys.maxsize):
     model.eval()
-    eval_loss = 0
+    label_map = {}
     eval_labels = []
     eval_preds = []
+    eval_idxs = []
+    eval_loss = 0
     nr_correct = 0
     nr_labels = 0
     eval_progbar = tqdm(eval_dataloader)
     for step, batch in enumerate(eval_progbar):
         batch = {k: v.to(model.device) for k, v in batch.items()}
         weights = batch.pop('weights')
+        eval_idxs.extend(batch.pop('idxs'))
         with torch.no_grad():
             outputs = model(**batch)
+            pred_tokens = outputs.logits[:, :, :].argmax(dim=-1)    # B x T
         loss = (weights * outputs.loss).sum()
         eval_loss += loss.detach().float()
 
-        with torch.no_grad():
-            # assuming single-token labels
-            pred_tokens = outputs.logits[:, :, :].argmax(dim=-1)  # B x T
-
         for b_i in range(len(batch['labels'])):
-            idxr = batch['labels'][b_i] != -100
-            i_label_token = batch['input_ids'][b_i][idxr][0]
-            i_pred_token = pred_tokens[b_i][idxr.roll(-1)][0]
-            label_text = tokenizer.decode(i_label_token)
-            eval_labels.append(label_text)
+            idxr = batch['labels'][b_i] != -100                     # positions in batch for which we have labels
 
-            pred_text = tokenizer.decode(i_pred_token)
-            eval_preds.append(pred_text)
+            label_tokens = batch['input_ids'][b_i][idxr]
+            label_fulltext = tokenizer.decode(label_tokens)
+            label_token = label_tokens[0].item()                    # first token
 
-            correct = int(label_text == pred_text)
-            nr_correct += correct
+            # add label token to map
+            if label_token not in label_map:
+                label_map[label_token] = label_fulltext
+            else:
+                assert label_map[label_token] == label_fulltext
+            eval_labels.append(label_token)
+
+            pred_token = pred_tokens[b_i][idxr.roll(-1)][0].item()  # first token
+            eval_preds.append(pred_token)
+
+            nr_correct += int(label_token == pred_token)
             nr_labels += 1
 
-        eval_progbar.set_postfix(accuracy=nr_correct / nr_labels, num_samples=nr_labels)
+        eval_progbar.set_postfix(accuracy=nr_correct/nr_labels, num_samples=nr_labels)
 
         if nr_labels >= samples_eval:
             break
 
     eval_epoch_loss = eval_loss / nr_labels
     print(f"{eval_epoch_loss=}")
-    print(classification_report(eval_labels, eval_preds))
 
-    return eval_epoch_loss, eval_preds, eval_labels
+    labels = list(label_map.keys())
+    target_names = [label_map[lbl] for lbl in labels]
+    print(classification_report(eval_labels, eval_preds, labels=labels, target_names=target_names))
+    report_dict = classification_report(
+        eval_labels, eval_preds, labels=labels, target_names=target_names, output_dict=True)
+
+    return report_dict, label_map, eval_idxs, eval_preds, eval_labels
 
 
 @Step.register('finetune')
 class Finetune(Step):
     FORMAT = TorchFormat
+    CACHEABLE = True
 
     def run(
         self, model: Model, data: DatasetDict, tokenizer: Tokenizer,
@@ -103,12 +115,13 @@ class Finetune(Step):
             def _train():
                 model.train()
                 total_loss = 0
-                progress_bar = tqdm(train_dataloader)
                 step = 0
                 nr_samples = 0
+                progress_bar = tqdm(train_dataloader)
                 for batch_i, batch in enumerate(progress_bar):
                     batch = {k: v.to(model.device) for k, v in batch.items()}
                     weights = batch.pop('weights')
+                    batch.pop('idxs')
                     nr_samples += len(weights)
 
                     outputs = model(**batch)
@@ -143,7 +156,8 @@ class Finetune(Step):
             best_score = None
             for epoch in range(num_epochs):
                 _train()
-                score = _eval(model, valid_dataloader, tokenizer, samples_eval=min_samples_eval)
+                report, _, _, _, _ = _eval(model, valid_dataloader, tokenizer, samples_eval=min_samples_eval)
+                score = report['Toxic']['f1-score'] if 'Toxic' in report else -1
 
                 if best_score is None or score > best_score:
                     best_score = score
@@ -164,16 +178,40 @@ class Test(Step):
 
         collate_fn = partial(collate_data, pad_token_id=tokenizer.pad_token_id)
         test_dataloader = DataLoader(tokenized_data['test'], batch_size=1, shuffle=False, collate_fn=collate_fn)
-        test_loss, test_preds, test_labels = _eval(model, test_dataloader, tokenizer)
+        report, label_map, test_idxs, test_preds, test_labels = _eval(model, test_dataloader, tokenizer)
+        inv_label_map = {v: k for k, v in label_map.items()}
 
-        test_data['predictions'] = test_preds
-        test_data['labels'] = test_labels
-        test_data['correct'] = test_data['predictions'] == test_data['labels']
+        test_data['predictions'] = [v for _, v in sorted(enumerate(test_preds), key=lambda kv: test_idxs[kv[0]])]
+        test_data['labels'] = [v for _, v in sorted(enumerate(test_labels), key=lambda kv: test_idxs[kv[0]])]
+        test_data['support'] = [1] * len(test_data)
 
-        acc_by_primary = test_data[['annotation_Primary', 'correct']].groupby(by='annotation_Primary').mean()
-        acc_by_context = test_data[['annotation_Context', 'correct']].groupby(by='annotation_Context').mean()
+        def add_f1(df, cls):
+            df[f'{cls}_f1'] = 2 * df[f'{cls}_tp'] / (2 * df[f'{cls}_tp'] + df[f'{cls}_fp'] + df[f'{cls}_fn'])
+            df[f'{cls}_pr'] = df[f'{cls}_tp'] / (df[f'{cls}_tp'] + df[f'{cls}_fp'])
+            df[f'{cls}_re'] = df[f'{cls}_tp'] / (df[f'{cls}_tp'] + df[f'{cls}_fn'])
+            return df
 
-        print(acc_by_primary)
-        print(acc_by_context)
+        results = {}
+        for cls, token_id in inv_label_map.items():
+            test_data[f'{cls}_true'] = test_data['labels'] == token_id
+            test_data[f'{cls}_pos'] = test_data['predictions'] == token_id
+            test_data[f'{cls}_tp'] = test_data[f'{cls}_true'] & test_data[f'{cls}_pos']
+            test_data[f'{cls}_fp'] = ~test_data[f'{cls}_true'] & test_data[f'{cls}_pos']
+            test_data[f'{cls}_fn'] = test_data[f'{cls}_true'] & ~test_data[f'{cls}_pos']
 
-        return test_preds, acc_by_primary, acc_by_context
+            columns = ['support'] + [f'{cls}_tp', f'{cls}_fp', f'{cls}_fn']
+            by_primary = test_data[columns+['annotation_Primary']].groupby(by='annotation_Primary').sum()
+            by_context = test_data[columns+['annotation_Context']].groupby(by='annotation_Context').sum()
+
+            columns.remove('support')
+            by_primary = add_f1(by_primary, cls).drop(columns=columns)
+            by_context = add_f1(by_context, cls).drop(columns=columns)
+            results[f'{cls}_scores_by_primary'] = by_primary
+            results[f'{cls}_scores_by_context'] = by_context
+
+            print(by_primary)
+            print()
+            print(by_context)
+            print()
+
+        return test_preds, results

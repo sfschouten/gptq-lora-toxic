@@ -1,0 +1,3 @@
+workspace:
+  type: local
+  dir: ./workspace

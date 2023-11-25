@@ -138,6 +138,7 @@ class FlattenCAD(Step[pd.DataFrame]):
 class PrepareCAD(Step[datasets.DatasetDict]):
     DETERMINISTIC = True
     FORMAT = DatasetsFormat
+    VERSION = "2"
 
     @classmethod
     def _annotations_to_class(cls, annotations):
