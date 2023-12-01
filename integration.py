@@ -1,6 +1,8 @@
 """
 Additional integration between libraries and AI2 Tango
 """
+import copy
+
 from typing import Optional, Type
 
 from tango.common import Registrable
@@ -33,7 +35,27 @@ class PeftWrapper(PeftModel):
     def get_peft_model_constr(cls, base_model: Model, peft_config: PeftConfig) -> PeftModel:
         if base_model.is_quantized and base_model.quantization_method == 'gptq':
             base_model = peft.prepare_model_for_kbit_training(base_model)
-        return get_peft_model(base_model, peft_config)
+        peft_model = get_peft_model(base_model, peft_config)
+
+        # At some point tango needs to deepcopy the model, but auto-gptq's cuda-based QuantLinear classes have an
+        #  attribute whose value is a module, which deepcopy cannot copy.
+        # Here we patch the cuda versions of QuantLinear with a custom __deepcopy__ function to avoid this problem.
+
+        def my_deepcopy(self, memo):
+            new_instance = self.__class__.__new__(self.__class__)
+            for k, v in self.__dict__.items():
+                if k == 'autogptq_cuda':
+                    setattr(new_instance, k, v)
+                else:
+                    setattr(new_instance, k, copy.deepcopy(v, memo))
+            return new_instance
+
+        from auto_gptq.nn_modules.qlinear.qlinear_cuda import QuantLinear as QuantLinearCUDA
+        from auto_gptq.nn_modules.qlinear.qlinear_cuda_old import QuantLinear as QuantLinearCUDAOld
+        QuantLinearCUDA.__deepcopy__ = my_deepcopy
+        QuantLinearCUDAOld.__deepcopy__ = my_deepcopy
+
+        return peft_model
 
 
 Model.register("peft::get_peft_model", constructor="get_peft_model_constr")(PeftWrapper)
