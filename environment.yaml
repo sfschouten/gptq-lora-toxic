@@ -2,14 +2,20 @@ channels:
   - nvidia
   - conda-forge
 dependencies:
-  - pytorch::pytorch
-  - pytorch::pytorch-cuda
+  - pytorch::pytorch=2.1
+  - pytorch::pytorch-cuda=12.1
   - tokenizers>=0.13.3
-  - transformers[torch]
-  - conda-forge::peft
-  - conda-forge::optimum
-  - anaconda::scikit-learn
+  - transformers>=4.31
+  - peft
+  - optimum
+  - scikit-learn
+  # -- ai2-tango
+  - datasets
+  - sentencepiece
+  - numpy
+  - sacremoses
+  # --
   - pip
   - pip:
-    - ai2-tango[all]
+    - ai2-tango  # without extensions, since they pull in older versions of torch and transformers
     - auto-gptq
